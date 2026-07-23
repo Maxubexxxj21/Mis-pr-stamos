@@ -90,6 +90,17 @@
         <label for="f-notes">Observaciones (opcional)</label>
         <textarea id="f-notes" rows="3" placeholder="Notas libres sobre este cliente o préstamo"></textarea>
 
+        <div id="new-client-attachments-section">
+          <label for="f-attachments">Foto(s) o PDF del contrato de préstamo (opcional)</label>
+          <input type="file" id="f-attachments" accept="image/*,application/pdf" multiple>
+          <p class="file-hint">Puedes subir hasta 6 archivos, máximo 4MB cada uno. Se guardan solo en este celular.</p>
+          <div class="attachment-list" id="pending-attachments-preview"></div>
+        </div>
+
+        <div id="existing-client-attachments-notice" class="card" style="display:none; font-size:14px;">
+          📎 Para agregar o quitar fotos/PDF del contrato de un cliente existente, hazlo desde su pantalla de detalle.
+        </div>
+
         <button type="submit" class="full">Guardar cliente</button>
         <button type="button" id="delete-client-btn" class="full danger" style="display:none;">Eliminar cliente</button>
       </form>
@@ -111,6 +122,13 @@
         <p>Saldo de capital pendiente: <strong id="detail-balance"></strong></p>
         <p>Tasa mensual: <strong id="detail-rate"></strong></p>
         <p>Observaciones: <span id="detail-notes"></span></p>
+
+        <div class="gain-highlight">
+          <div class="gain-label">Ganancia total al finalizar el préstamo (todo el interés cobrado, mes a mes hasta la última cuota)</div>
+          <div class="gain-value" id="detail-gain-total"></div>
+          <div class="gain-label" style="margin-top:6px;">Ganancia ya cobrada hasta hoy: <strong id="detail-gain-collected"></strong></div>
+        </div>
+
         <div class="row" style="margin-top:12px;">
           <button id="edit-client-btn" class="secondary">✏️ Editar</button>
           <button id="extra-loan-btn" class="secondary">➕ Ampliar</button>
@@ -132,6 +150,14 @@
           <thead><tr><th>Fecha</th><th>Tipo</th><th>Monto</th></tr></thead>
           <tbody id="ledger-body"></tbody>
         </table>
+      </div>
+
+      <div class="section-title">Fotos / PDF del contrato</div>
+      <div class="card">
+        <label for="detail-attachments-input">Agregar foto o PDF del contrato</label>
+        <input type="file" id="detail-attachments-input" accept="image/*,application/pdf" multiple>
+        <p class="file-hint">Máximo 6 archivos por cliente, 4MB cada uno.</p>
+        <div class="attachment-list" id="detail-attachments"></div>
       </div>
     </main>
   </div>

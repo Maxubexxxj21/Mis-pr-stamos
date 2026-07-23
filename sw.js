@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mis-prestamos-v1';
+const CACHE_NAME = 'mis-prestamos-v2';
 const ASSETS = [
   './index.html',
   './style.css',
