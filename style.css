@@ -340,3 +340,34 @@ th { color: var(--text-dim); font-weight: 600; }
   color: var(--text-dim);
   margin-top: 4px;
 }
+
+/* ---------- Acciones en tarjeta de cliente, banner y nube ---------- */
+
+.card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+button.small {
+  padding: 10px 12px;
+  min-height: 48px;
+  font-size: 14px;
+}
+
+.banner {
+  border-color: var(--accent);
+}
+
+.banner p {
+  color: var(--text-dim);
+  font-size: 15px;
+}
+
+.cloud-status {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.cloud-status.ok { color: #86efac; }
+.cloud-status.warn { color: #fcd34d; }
+.cloud-status.off { color: var(--text-dim); }

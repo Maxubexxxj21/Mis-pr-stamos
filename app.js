@@ -1,10 +1,10 @@
 /* ============================================================
    MIS PRÉSTAMOS - Lógica de la aplicación
-   Almacenamiento 100% local (localStorage). Sin servidores.
+   Datos en el celular (localStorage) + copia en Google Drive.
    ============================================================ */
 
 const STORAGE_KEY = 'prestamos_data_v1';
-const MAX_ATTACHMENT_MB = 4; // límite por archivo, para no saturar localStorage
+const MAX_ATTACHMENT_MB = 4;
 const MAX_ATTACHMENTS_PER_CLIENT = 6;
 
 /* ---------- Utilidades generales ---------- */
@@ -29,10 +29,11 @@ function loadData() {
 function saveData(data) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    if (typeof scheduleCloudBackup === 'function') scheduleCloudBackup();
     return true;
   } catch (e) {
     console.error('Error guardando datos', e);
-    showToastSafe('No se pudo guardar: el almacenamiento está lleno. Elimina algún adjunto pesado o exporta y limpia respaldos antiguos.');
+    showToastSafe('No se pudo guardar: el almacenamiento está lleno. Elimina algún adjunto pesado.');
     return false;
   }
 }
@@ -50,11 +51,18 @@ function money(n) {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
-// Suma "months" meses a una fecha ISO (YYYY-MM-DD), ajustando el día
-// si el mes destino tiene menos días (ej. 31 de enero + 1 mes = 28/29 feb).
+function isoFromDate(d) {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function addMonths(dateISO, months) {
   const d = new Date(dateISO + 'T00:00:00');
   const day = d.getDate();
@@ -62,7 +70,7 @@ function addMonths(dateISO, months) {
   d.setMonth(d.getMonth() + months);
   const daysInTarget = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
   d.setDate(Math.min(day, daysInTarget));
-  return d.toISOString().slice(0, 10);
+  return isoFromDate(d);
 }
 
 function fmtDate(iso) {
@@ -89,8 +97,7 @@ function validateClientForm(f) {
    ============================================================ */
 
 // MÓDULO 1: Solo interés mensual, capital al final.
-// Ejemplo validación: Capital 100, tasa 10%, 5 meses ->
-//   meses 1-4: 10 soles (interés). Mes 5: 10 + 100 = 110 soles.
+// Ejemplo: Capital 100, tasa 10%, 5 meses -> meses 1-4: 10 soles; mes 5: 110.
 function buildModule1Schedule(principal, rate, months, startDate, paymentDay, fromNumber = 1) {
   const schedule = [];
   const interest = round2(principal * (rate / 100));
@@ -111,12 +118,8 @@ function buildModule1Schedule(principal, rate, months, startDate, paymentDay, fr
   return schedule;
 }
 
-// MÓDULO 2 - MÉTODO 1 (predeterminado): interés fijo sobre capital ORIGINAL
-// del ciclo vigente, amortización fija, cuota constante.
-// Ejemplo validación: Capital 100, tasa 10%, 5 meses ->
-//   Amortización = 100/5 = 20 soles/mes
-//   Interés = 100 * 10% = 10 soles/mes (constante)
-//   Cuota = 30 soles/mes, los 5 meses.
+// MÓDULO 2 - MÉTODO 1 (predeterminado): interés fijo sobre el capital del ciclo.
+// Ejemplo: Capital 100, tasa 10%, 5 meses -> 20 + 10 = 30 soles cada mes.
 function buildModule2FixedSchedule(balance, rate, months, startDate, paymentDay, fromNumber = 1) {
   const schedule = [];
   const amortization = round2(balance / months);
@@ -142,12 +145,8 @@ function buildModule2FixedSchedule(balance, rate, months, startDate, paymentDay,
   return schedule;
 }
 
-// MÓDULO 2 - MÉTODO 2 (alternativo, no predeterminado): interés sobre saldo
-// decreciente. Amortización fija, interés y cuota total decrecen cada mes.
-// Ejemplo: Capital 100, tasa 10%, 5 meses ->
-//   Amortización = 20 soles/mes (fija)
-//   Mes1: interés=10 (10% de 100), cuota=30, saldo=80
-//   Mes2: interés=8  (10% de 80),  cuota=28, saldo=60 ... etc.
+// MÓDULO 2 - MÉTODO 2 (alternativo): interés sobre saldo decreciente.
+// Ejemplo: Capital 100, tasa 10%, 5 meses -> cuotas 30, 28, 26, 24, 22.
 function buildModule2DecliningSchedule(balance, rate, months, startDate, paymentDay, fromNumber = 1) {
   const schedule = [];
   const amortization = round2(balance / months);
@@ -175,10 +174,8 @@ function buildModule2DecliningSchedule(balance, rate, months, startDate, payment
 
 function dueDateFor(startDate, paymentDay, installmentNumber) {
   const base = new Date(startDate + 'T00:00:00');
-  const y = base.getFullYear();
-  const m = base.getMonth();
-  const iso = new Date(y, m, 1).toISOString().slice(0, 10);
-  const withDay = setDaySafe(iso, paymentDay);
+  const firstOfMonth = isoFromDate(new Date(base.getFullYear(), base.getMonth(), 1));
+  const withDay = setDaySafe(firstOfMonth, paymentDay);
   return addMonths(withDay, installmentNumber);
 }
 
@@ -186,7 +183,7 @@ function setDaySafe(monthISO, day) {
   const d = new Date(monthISO + 'T00:00:00');
   const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
   d.setDate(Math.min(day, daysInMonth));
-  return d.toISOString().slice(0, 10);
+  return isoFromDate(d);
 }
 
 function round2(n) {
@@ -205,54 +202,49 @@ function generateFullSchedule(client) {
   return buildModule2FixedSchedule(client.principal, client.rate, client.months, client.startDate, client.paymentDay, 1);
 }
 
-// Recalcula únicamente las cuotas NO pagadas a partir de un nuevo saldo,
-// conservando intactas las cuotas ya pagadas.
 function regenerateRemaining(client, newBalance, newRemainingMonths) {
   const paid = client.installments.filter((i) => i.status === 'pagado');
   const lastPaidNumber = paid.length ? Math.max(...paid.map((i) => i.number)) : 0;
   const nextNumber = lastPaidNumber + 1;
 
-  let remainingSchedule;
-  if (client.module === 1) {
-    remainingSchedule = buildModule1Schedule(newBalance, client.rate, newRemainingMonths, client.startDate, client.paymentDay, 1)
-      .map((inst, idx) => ({ ...inst, number: nextNumber + idx, dueDate: dueDateFromToday(client, nextNumber + idx - lastPaidNumber) }));
-  } else if (client.method === 'declining') {
-    remainingSchedule = buildModule2DecliningSchedule(newBalance, client.rate, newRemainingMonths, client.startDate, client.paymentDay, 1)
-      .map((inst, idx) => ({ ...inst, number: nextNumber + idx, dueDate: dueDateFromToday(client, nextNumber + idx - lastPaidNumber) }));
-  } else {
-    remainingSchedule = buildModule2FixedSchedule(newBalance, client.rate, newRemainingMonths, client.startDate, client.paymentDay, 1)
-      .map((inst, idx) => ({ ...inst, number: nextNumber + idx, dueDate: dueDateFromToday(client, nextNumber + idx - lastPaidNumber) }));
-  }
+  let builder;
+  if (client.module === 1) builder = buildModule1Schedule;
+  else if (client.method === 'declining') builder = buildModule2DecliningSchedule;
+  else builder = buildModule2FixedSchedule;
+
+  const remainingSchedule = builder(newBalance, client.rate, newRemainingMonths, client.startDate, client.paymentDay, 1)
+    .map((inst, idx) => ({ ...inst, number: nextNumber + idx, dueDate: dueDateFromToday(client, idx + 1) }));
+
   client.installments = [...paid, ...remainingSchedule];
   client.months = client.installments.length;
 }
 
 function dueDateFromToday(client, monthsAhead) {
-  const base = setDaySafe(todayISO().slice(0, 8) + '01', client.paymentDay);
+  const firstOfThisMonth = todayISO().slice(0, 8) + '01';
+  const base = setDaySafe(firstOfThisMonth, client.paymentDay);
   return addMonths(base, monthsAhead);
 }
 
 function currentBalance(client) {
-  if (client.module === 1) return client.principal;
   const unpaid = client.installments.filter((i) => i.status !== 'pagado');
   if (unpaid.length === 0) return 0;
-  const prevPaid = client.installments.filter((i) => i.status === 'pagado');
-  const amortPaid = prevPaid.reduce((s, i) => s + i.amortization, 0);
+  if (client.module === 1) return client.principal;
+  const amortPaid = client.installments
+    .filter((i) => i.status === 'pagado')
+    .reduce((s, i) => s + i.amortization, 0);
   return round2(client.principal - amortPaid);
 }
 
-// GANANCIA TOTAL: suma de todo el interés cobrado a lo largo del préstamo
-// (cronograma completo vigente, incluyendo cuotas ya pagadas y las que faltan).
+// Ganancia total: suma de todo el interés del cronograma vigente.
 function calcTotalGain(client) {
   return round2(client.installments.reduce((sum, inst) => sum + inst.interest, 0));
 }
 
-// Ganancia ya cobrada (solo cuotas efectivamente pagadas).
 function calcGainCollected(client) {
   return round2(client.installments.filter((i) => i.status === 'pagado').reduce((sum, inst) => sum + inst.interest, 0));
 }
 
-/* ---------- Estado de cuotas (pendiente/pagado/atrasado) ---------- */
+/* ---------- Estado de cuotas ---------- */
 
 function refreshStatuses(client) {
   const today = todayISO();
@@ -336,11 +328,15 @@ function registerPayment(clientId, installmentNumber, paidDate, paidAmount) {
 function undoPayment(clientId, installmentNumber) {
   const client = DB.clients.find((c) => c.id === clientId);
   const inst = client.installments.find((i) => i.number === installmentNumber);
-  if (!inst) return;
+  if (!inst || inst.settlement) return;
   inst.status = inst.dueDate < todayISO() ? 'atrasado' : 'pendiente';
   inst.paidDate = null;
   inst.paidAmount = null;
   saveData(DB);
+}
+
+function sumPaidAmortization(client) {
+  return client.installments.filter((i) => i.status === 'pagado').reduce((s, i) => s + i.amortization, 0);
 }
 
 function registerExtraLoan(clientId, amount, date, note) {
@@ -354,7 +350,8 @@ function registerExtraLoan(clientId, amount, date, note) {
     client.installments = generateFullScheduleKeepingPaid(client);
   } else {
     regenerateRemaining(client, newBalance, remainingMonths);
-    client.principal = newBalance;
+    // El capital de referencia incluye lo ya amortizado, para que el saldo = capital - amortizado.
+    client.principal = round2(newBalance + sumPaidAmortization(client));
   }
   client.ledger.push({ date, type: 'ampliacion', amount, note: note || 'Ampliación de préstamo' });
   saveData(DB);
@@ -363,7 +360,7 @@ function registerExtraLoan(clientId, amount, date, note) {
 function generateFullScheduleKeepingPaid(client) {
   const paid = client.installments.filter((i) => i.status === 'pagado');
   const lastPaidNumber = paid.length ? Math.max(...paid.map((i) => i.number)) : 0;
-  const remainingMonths = client.months - paid.length;
+  const remainingMonths = Math.max(client.months - paid.length, 1);
   const rest = buildModule1Schedule(client.principal, client.rate, remainingMonths, client.startDate, client.paymentDay, 1)
     .map((inst, idx) => ({ ...inst, number: lastPaidNumber + 1 + idx, dueDate: dueDateFromToday(client, idx + 1) }));
   return [...paid, ...rest];
@@ -387,8 +384,6 @@ function registerPrepayment(clientId, amount, date, choice, note) {
     } else if (choice === 'reduce_months') {
       const approxAmort = currentQuota ? currentQuota.amortization : (newBalance / currentRemainingMonths);
       newRemainingMonths = Math.max(1, Math.ceil(newBalance / (approxAmort || newBalance)));
-    } else {
-      newRemainingMonths = currentRemainingMonths;
     }
 
     if (newBalance <= 0) {
@@ -398,9 +393,44 @@ function registerPrepayment(clientId, amount, date, choice, note) {
     } else {
       regenerateRemaining(client, newBalance, newRemainingMonths);
     }
-    client.principal = newBalance + client.installments.filter(i => i.status === 'pagado').reduce((s, i) => s + i.amortization, 0);
+    client.principal = round2(newBalance + sumPaidAmortization(client));
   }
   client.ledger.push({ date, type: 'abono', amount, note: note || (choice === 'reduce_months' ? 'Abono a capital (reduce meses)' : 'Abono a capital (reduce cuota)') });
+  saveData(DB);
+}
+
+/* ---------- Liquidación total anticipada ---------- */
+
+function calcPayoffSuggestion(client) {
+  const unpaid = client.installments.filter((i) => i.status !== 'pagado');
+  if (unpaid.length === 0) return { balance: 0, nextInterest: 0, suggested: 0 };
+  const balance = currentBalance(client);
+  const nextInterest = unpaid[0].interest;
+  return { balance, nextInterest, suggested: round2(balance + nextInterest) };
+}
+
+// Cierra el préstamo: reemplaza todas las cuotas pendientes por una sola
+// "liquidación" pagada. La ganancia real = monto pagado - capital pendiente.
+function registerFullPayoff(clientId, date, amount) {
+  const client = DB.clients.find((c) => c.id === clientId);
+  if (!client) return;
+  const balance = currentBalance(client);
+  const paid = client.installments.filter((i) => i.status === 'pagado');
+  const lastNumber = paid.length ? Math.max(...paid.map((i) => i.number)) : 0;
+  const settlement = {
+    number: lastNumber + 1,
+    dueDate: date,
+    amortization: balance,
+    interest: round2(Math.max(amount - balance, 0)),
+    total: round2(amount),
+    status: 'pagado',
+    paidDate: date,
+    paidAmount: amount,
+    settlement: true
+  };
+  client.installments = [...paid, settlement];
+  client.months = client.installments.length;
+  client.ledger.push({ date, type: 'liquidacion', amount, note: 'Liquidación total anticipada' });
   saveData(DB);
 }
 
@@ -455,15 +485,14 @@ function removeAttachment(clientId, attachmentId) {
   saveData(DB);
 }
 
-/* ---------- Exportar / Importar ---------- */
+/* ---------- Exportar / Importar (archivo manual) ---------- */
 
 function exportData() {
   const blob = new Blob([JSON.stringify(DB, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const stamp = todayISO();
   a.href = url;
-  a.download = `respaldo_prestamos_${stamp}.json`;
+  a.download = `respaldo_prestamos_${todayISO()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -472,11 +501,347 @@ function exportData() {
 
 function importData(jsonText) {
   const parsed = JSON.parse(jsonText);
-  if (!parsed.clients || !Array.isArray(parsed.clients)) {
+  if (!parsed || !Array.isArray(parsed.clients)) {
     throw new Error('El archivo no tiene el formato correcto.');
   }
+  parsed.clients.forEach((c) => {
+    if (!c.id || !c.name || !Array.isArray(c.installments)) {
+      throw new Error('El archivo no tiene el formato correcto.');
+    }
+    c.ledger = c.ledger || [];
+    c.attachments = c.attachments || [];
+  });
+  const previous = DB;
   DB = parsed;
-  saveData(DB);
+  if (!saveData(DB)) {
+    DB = previous;
+    throw new Error('storage_full');
+  }
+}
+
+/* ============================================================
+   COPIA DE SEGURIDAD EN GOOGLE DRIVE
+   - Se guarda en el Drive del usuario como "respaldo_mis_prestamos.json".
+   - Permiso mínimo: solo archivos creados por esta app (drive.file).
+   - Se actualiza (sobrescribe) ~20 s después de cada cambio y una vez
+     cada noche (a partir de las 8 pm) cuando la app se abre o está en uso.
+   ============================================================ */
+
+const DRIVE_FILE_NAME = 'respaldo_mis_prestamos.json';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const LS = {
+  connected: 'cloud_connected',
+  lastAt: 'cloud_last_backup_at',
+  lastHash: 'cloud_last_hash',
+  fileId: 'cloud_file_id',
+  trusted: 'cloud_device_trusted',
+  restoreDismissed: 'cloud_restore_dismissed'
+};
+
+let driveToken = null;
+let driveTokenExpiry = 0;
+let tokenClient = null;
+let backupTimer = null;
+let backupRunning = false;
+let cloudState = 'idle'; // idle | ok | needs_auth | error
+
+function cloudConfigured() {
+  return typeof GOOGLE_CLIENT_ID === 'string' &&
+    GOOGLE_CLIENT_ID.endsWith('.apps.googleusercontent.com') &&
+    !GOOGLE_CLIENT_ID.startsWith('PEGA_AQUI');
+}
+
+function isCloudConnected() {
+  return localStorage.getItem(LS.connected) === '1';
+}
+
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  }
+  return String(h) + ':' + str.length;
+}
+
+function getAccessToken(interactive) {
+  return new Promise((resolve, reject) => {
+    if (driveToken && Date.now() < driveTokenExpiry - 60000) return resolve(driveToken);
+    if (!(window.google && google.accounts && google.accounts.oauth2)) {
+      return reject(new Error('sin_google'));
+    }
+    if (!tokenClient) {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: DRIVE_SCOPE,
+        callback: () => {},
+        error_callback: () => {}
+      });
+    }
+    tokenClient.callback = (resp) => {
+      if (resp.error) return reject(new Error(resp.error));
+      driveToken = resp.access_token;
+      driveTokenExpiry = Date.now() + (parseInt(resp.expires_in, 10) || 3600) * 1000;
+      resolve(driveToken);
+    };
+    tokenClient.error_callback = (err) => reject(new Error((err && err.type) || 'popup'));
+    tokenClient.requestAccessToken({ prompt: interactive ? '' : '' });
+  });
+}
+
+async function driveRequest(url, options, token) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { ...(options && options.headers), Authorization: 'Bearer ' + token }
+  });
+  if (res.status === 401) {
+    driveToken = null;
+    throw new Error('auth');
+  }
+  return res;
+}
+
+async function findBackupFile(token) {
+  const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
+  const order = encodeURIComponent('modifiedTime desc');
+  const res = await driveRequest(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=${order}&pageSize=10&fields=files(id,name,modifiedTime)`,
+    {}, token
+  );
+  if (!res.ok) throw new Error('drive_' + res.status);
+  const data = await res.json();
+  return data.files && data.files.length ? data.files[0] : null;
+}
+
+async function uploadBackup(token, jsonString, fileId) {
+  if (fileId) {
+    const res = await driveRequest(
+      `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: jsonString },
+      token
+    );
+    if (res.ok) return fileId;
+    if (res.status !== 404) throw new Error('drive_' + res.status);
+  }
+  const boundary = 'prestamos' + Date.now();
+  const metadata = JSON.stringify({ name: DRIVE_FILE_NAME, mimeType: 'application/json' });
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${jsonString}\r\n--${boundary}--`;
+  const res = await driveRequest(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+    { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body },
+    token
+  );
+  if (!res.ok) throw new Error('drive_' + res.status);
+  const created = await res.json();
+  return created.id;
+}
+
+async function downloadBackup(token, fileId) {
+  const res = await driveRequest(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {}, token);
+  if (!res.ok) throw new Error('drive_' + res.status);
+  return res.text();
+}
+
+function friendlyCloudError(e) {
+  const m = (e && e.message) || '';
+  if (m === 'sin_google') return 'No pude conectar con Google. Revisa tu internet e inténtalo de nuevo.';
+  if (m === 'storage_full') return 'El celular no tiene espacio suficiente para restaurar los datos.';
+  if (m.includes('formato')) return m;
+  if (m.includes('popup') || m.includes('access_denied') || m.includes('auth') || m.includes('immediate')) {
+    return 'Google necesita que vuelvas a autorizar. Toca "Reconectar con Google Drive".';
+  }
+  if (m.startsWith('drive_403')) return 'Google Drive rechazó el permiso. Verifica que la API de Drive esté habilitada.';
+  return 'No se pudo completar la operación con Google Drive. Revisa tu internet.';
+}
+
+function setCloudState(state) {
+  cloudState = state;
+  updateCloudStatusUI();
+}
+
+// Sube la copia a Drive. Devuelve true si quedó respaldada (o ya estaba al día).
+async function runCloudBackup(opts = {}) {
+  const interactive = !!opts.interactive;
+  const force = !!opts.force;
+  if (!cloudConfigured() || backupRunning) return false;
+  if (!isCloudConnected() && !interactive) return false;
+
+  const json = JSON.stringify(DB);
+  const hash = hashString(json);
+  if (!force && hash === localStorage.getItem(LS.lastHash)) return true;
+
+  backupRunning = true;
+  try {
+    const token = await getAccessToken(interactive);
+    let fileId = localStorage.getItem(LS.fileId);
+    if (!fileId) {
+      const existing = await findBackupFile(token);
+      fileId = existing ? existing.id : null;
+    }
+    // Protección: un celular que aún no restauró no debe pisar la copia existente.
+    if (fileId && localStorage.getItem(LS.trusted) !== '1') {
+      setCloudState('needs_auth');
+      return false;
+    }
+    const newId = await uploadBackup(token, json, fileId);
+    localStorage.setItem(LS.fileId, newId);
+    localStorage.setItem(LS.trusted, '1');
+    localStorage.setItem(LS.lastHash, hash);
+    localStorage.setItem(LS.lastAt, String(Date.now()));
+    setCloudState('ok');
+    return true;
+  } catch (e) {
+    const m = (e && e.message) || '';
+    const needsAuth = m.includes('popup') || m.includes('access_denied') || m.includes('auth') || m.includes('immediate') || m === 'sin_google';
+    setCloudState(needsAuth ? 'needs_auth' : 'error');
+    if (interactive) showToast(friendlyCloudError(e), 5000);
+    return false;
+  } finally {
+    backupRunning = false;
+  }
+}
+
+function scheduleCloudBackup() {
+  if (!cloudConfigured() || !isCloudConnected()) return;
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => { runCloudBackup({}); }, 20000);
+}
+
+// Garantiza una copia cada noche: a partir de las 8 pm, si aún no hay copia de hoy.
+function maybeNightlyBackup() {
+  if (!cloudConfigured() || !isCloudConnected()) return;
+  const last = parseInt(localStorage.getItem(LS.lastAt) || '0', 10);
+  const now = new Date();
+  const today8pm = new Date(now);
+  today8pm.setHours(20, 0, 0, 0);
+  const older24h = !last || (Date.now() - last) > 24 * 3600 * 1000;
+  const dueTonight = now >= today8pm && last < today8pm.getTime();
+  if (older24h || dueTonight) runCloudBackup({ force: true });
+}
+
+async function restoreFromDrive(token, file) {
+  const text = await downloadBackup(token, file.id);
+  importData(text);
+  localStorage.setItem(LS.fileId, file.id);
+  localStorage.setItem(LS.connected, '1');
+  localStorage.setItem(LS.trusted, '1');
+  localStorage.setItem(LS.restoreDismissed, '1');
+  localStorage.setItem(LS.lastHash, hashString(JSON.stringify(DB)));
+  localStorage.setItem(LS.lastAt, String(Date.now()));
+  setCloudState('ok');
+  renderHome();
+  showToast(`Datos restaurados: ${DB.clients.length} cliente(s).`, 4500);
+}
+
+async function connectCloud() {
+  if (!cloudConfigured()) {
+    showToast('Falta pegar tu ID de cliente de Google en el archivo config.js.', 5000);
+    return;
+  }
+  try {
+    const token = await getAccessToken(true);
+    const file = await findBackupFile(token);
+    if (file) {
+      const when = new Date(file.modifiedTime).toLocaleString('es-PE');
+      if (confirm(`Encontré una copia de seguridad en tu Google Drive (${when}).\n\n¿Quieres restaurarla ahora? Reemplazará los datos de este celular.`)) {
+        await restoreFromDrive(token, file);
+        return;
+      }
+      if (!confirm('Entonces la copia antigua de Drive será REEMPLAZADA por los datos de este celular. ¿Continuar?')) {
+        return;
+      }
+      localStorage.setItem(LS.fileId, file.id);
+    }
+    localStorage.setItem(LS.connected, '1');
+    localStorage.setItem(LS.trusted, '1');
+    localStorage.setItem(LS.restoreDismissed, '1');
+    const ok = await runCloudBackup({ interactive: true, force: true });
+    if (ok) showToast('Listo: tu copia en Google Drive está activa.', 4000);
+    renderHome();
+  } catch (e) {
+    showToast(friendlyCloudError(e), 5000);
+  }
+}
+
+async function manualBackup() {
+  if (!cloudConfigured()) {
+    showToast('Falta pegar tu ID de cliente de Google en el archivo config.js.', 5000);
+    return;
+  }
+  if (!isCloudConnected()) { await connectCloud(); return; }
+  const ok = await runCloudBackup({ interactive: true, force: true });
+  if (ok) showToast('Copia guardada en Google Drive.');
+}
+
+async function manualRestore() {
+  if (!cloudConfigured()) {
+    showToast('Falta pegar tu ID de cliente de Google en el archivo config.js.', 5000);
+    return;
+  }
+  if (DB.clients.length > 0 && !confirm('Esto reemplazará los datos de este celular por los de tu copia en Google Drive. ¿Continuar?')) return;
+  try {
+    const token = await getAccessToken(true);
+    const file = await findBackupFile(token);
+    if (!file) {
+      showToast('No encontré ninguna copia en este Google Drive. Revisa que elegiste la misma cuenta de Google de antes.', 6000);
+      return;
+    }
+    await restoreFromDrive(token, file);
+  } catch (e) {
+    showToast(friendlyCloudError(e), 5000);
+  }
+}
+
+function updateCloudStatusUI() {
+  const statusEl = document.getElementById('cloud-status');
+  const connectBtn = document.getElementById('cloud-connect-btn');
+  const backupBtn = document.getElementById('cloud-backup-btn');
+  const restoreBtn = document.getElementById('cloud-restore-btn');
+  if (!statusEl) return;
+
+  if (!cloudConfigured()) {
+    statusEl.className = 'cloud-status off';
+    statusEl.textContent = '☁️ Copia en la nube: aún no configurada (falta pegar tu ID de cliente de Google en config.js).';
+    connectBtn.style.display = 'none';
+    backupBtn.style.display = 'none';
+    restoreBtn.style.display = 'none';
+    return;
+  }
+
+  restoreBtn.style.display = 'block';
+  if (!isCloudConnected()) {
+    statusEl.className = 'cloud-status off';
+    statusEl.textContent = '☁️ Copia en la nube: desconectada. Conéctala para que tus datos se respalden solos en Google Drive.';
+    connectBtn.style.display = 'block';
+    connectBtn.textContent = '☁️ Conectar con Google Drive';
+    backupBtn.style.display = 'none';
+    return;
+  }
+
+  const last = parseInt(localStorage.getItem(LS.lastAt) || '0', 10);
+  const lastTxt = last ? new Date(last).toLocaleString('es-PE') : 'todavía ninguna';
+  backupBtn.style.display = 'block';
+  if (cloudState === 'needs_auth' || cloudState === 'error') {
+    statusEl.className = 'cloud-status warn';
+    statusEl.textContent = `⚠️ No pude actualizar la copia. Última copia: ${lastTxt}. Toca "Reconectar con Google Drive".`;
+    connectBtn.style.display = 'block';
+    connectBtn.textContent = '🔄 Reconectar con Google Drive';
+  } else {
+    statusEl.className = 'cloud-status ok';
+    statusEl.textContent = `✅ Copia automática activa. Última copia en Drive: ${lastTxt}.`;
+    connectBtn.style.display = 'none';
+  }
+}
+
+function updateRestoreBanner() {
+  const banner = document.getElementById('restore-banner');
+  if (!banner) return;
+  const show = cloudConfigured() &&
+    DB.clients.length === 0 &&
+    localStorage.getItem(LS.trusted) !== '1' &&
+    localStorage.getItem(LS.restoreDismissed) !== '1';
+  banner.style.display = show ? 'block' : 'none';
 }
 
 /* ============================================================
@@ -486,7 +851,7 @@ function importData(jsonText) {
 let currentModuleTab = 1;
 let currentClientId = null;
 let editingClientId = null;
-let pendingNewAttachments = []; // adjuntos elegidos en el formulario de nuevo cliente, antes de guardar
+let pendingNewAttachments = [];
 
 const screens = {
   home: document.getElementById('screen-home'),
@@ -499,11 +864,12 @@ function showScreen(name) {
   screens[name].classList.add('active');
 }
 
-function showToast(msg) {
+function showToast(msg, ms) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2200);
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), ms || 3200);
 }
 
 function setTab(moduleNum) {
@@ -516,6 +882,8 @@ function setTab(moduleNum) {
 function renderHome() {
   const list = document.getElementById('client-list');
   list.innerHTML = '';
+  updateRestoreBanner();
+  updateCloudStatusUI();
   const clients = DB.clients.filter((c) => c.module === currentModuleTab);
 
   if (clients.length === 0) {
@@ -533,9 +901,22 @@ function renderHome() {
       <div class="info">
         <h3><span class="badge ${color}"></span>${escapeHtml(client.name)}</h3>
         <p>Capital: ${money(client.principal)} · Tasa: ${client.rate}%</p>
-        <p>${nextInst ? `Próxima cuota: ${money(nextInst.total)} · ${fmtDate(nextInst.dueDate)}` : 'Préstamo finalizado'}</p>
+        <p>${nextInst ? `Próxima cuota: ${money(nextInst.total)} · ${fmtDate(nextInst.dueDate)}` : '✅ Deuda terminada de pagar'}</p>
       </div>
+      <div class="card-actions"></div>
     `;
+    const actions = div.querySelector('.card-actions');
+    const btn = document.createElement('button');
+    if (status === 'finalizado') {
+      btn.className = 'danger small';
+      btn.textContent = '🗑 Eliminar';
+      btn.addEventListener('click', (e) => { e.stopPropagation(); deleteClientWithConfirm(client.id); });
+    } else {
+      btn.className = 'secondary small';
+      btn.textContent = '🏁 Liquidar';
+      btn.addEventListener('click', (e) => { e.stopPropagation(); openPayoffModal(client.id); });
+    }
+    actions.appendChild(btn);
     div.addEventListener('click', () => openDetail(client.id));
     list.appendChild(div);
   });
@@ -555,11 +936,9 @@ function openForm(clientId) {
   pendingNewAttachments = [];
   document.getElementById('form-title').textContent = isEdit ? 'Editar cliente' : 'Nuevo cliente';
   document.getElementById('form-module').value = isEdit ? DB.clients.find((c) => c.id === clientId).module : currentModuleTab;
-  toggleMethodField();
 
   clearFormErrors();
-  const f = document.getElementById('client-form');
-  f.reset();
+  document.getElementById('client-form').reset();
   document.getElementById('f-attachments').value = '';
 
   if (isEdit) {
@@ -697,71 +1076,62 @@ function renderDetail() {
   refreshStatuses(client);
   saveData(DB);
 
+  const finished = client.installments.every((i) => i.status === 'pagado');
+
   document.getElementById('detail-name').textContent = client.name;
   document.getElementById('detail-sub').textContent =
     (client.module === 1 ? 'Módulo: Solo interés mensual' : `Módulo: Amortización (${client.method === 'declining' ? 'saldo decreciente' : 'capital fijo'})`);
-
-  const balance = currentBalance(client);
-  document.getElementById('detail-balance').textContent = money(balance);
+  document.getElementById('detail-balance').textContent = money(currentBalance(client));
   document.getElementById('detail-rate').textContent = client.rate + '%';
   document.getElementById('detail-notes').textContent = client.notes || 'Sin observaciones.';
+  document.getElementById('detail-gain-total').textContent = money(calcTotalGain(client));
+  document.getElementById('detail-gain-collected').textContent = money(calcGainCollected(client));
 
-  // Ganancia total proyectada al finalizar el préstamo
-  const totalGain = calcTotalGain(client);
-  const gainCollected = calcGainCollected(client);
-  document.getElementById('detail-gain-total').textContent = money(totalGain);
-  document.getElementById('detail-gain-collected').textContent = money(gainCollected);
+  document.getElementById('payoff-btn').style.display = finished ? 'none' : 'block';
+  document.getElementById('detail-delete-btn').style.display = finished ? 'block' : 'none';
+  document.getElementById('extra-loan-btn').disabled = finished;
+  document.getElementById('prepay-btn').disabled = finished;
 
-  // Cuotas
   const instBody = document.getElementById('installments-body');
   instBody.innerHTML = '';
   client.installments.forEach((inst) => {
     const tr = document.createElement('tr');
     const colorDot = inst.status === 'pagado' ? '🟢' : inst.status === 'atrasado' ? '🔴' : '⚪';
     tr.innerHTML = `
-      <td>${inst.number}</td>
+      <td>${inst.settlement ? 'Liq.' : inst.number}</td>
       <td>${fmtDate(inst.dueDate)}</td>
       <td>${money(inst.total)}</td>
       <td>${colorDot} ${inst.status}</td>
       <td></td>
     `;
     const actionTd = tr.lastElementChild;
-    if (inst.status !== 'pagado') {
+    if (!inst.settlement) {
       const btn = document.createElement('button');
-      btn.textContent = 'Pagar';
       btn.className = 'secondary';
       btn.style.padding = '8px 10px';
       btn.style.minHeight = '38px';
       btn.style.fontSize = '14px';
-      btn.addEventListener('click', () => openPaymentModal(inst.number, inst.total));
-      actionTd.appendChild(btn);
-    } else {
-      const btn = document.createElement('button');
-      btn.textContent = 'Deshacer';
-      btn.className = 'secondary';
-      btn.style.padding = '8px 10px';
-      btn.style.minHeight = '38px';
-      btn.style.fontSize = '14px';
-      btn.addEventListener('click', () => {
-        undoPayment(client.id, inst.number);
-        renderDetail();
-      });
+      if (inst.status !== 'pagado') {
+        btn.textContent = 'Pagar';
+        btn.addEventListener('click', () => openPaymentModal(inst.number, inst.total));
+      } else {
+        btn.textContent = 'Deshacer';
+        btn.addEventListener('click', () => { undoPayment(client.id, inst.number); renderDetail(); });
+      }
       actionTd.appendChild(btn);
     }
     instBody.appendChild(tr);
   });
 
-  // Historial (ledger)
   const ledgerBody = document.getElementById('ledger-body');
   ledgerBody.innerHTML = '';
-  const labels = { origen: 'Préstamo original', ampliacion: 'Ampliación', abono: 'Abono a capital', pago: 'Pago de cuota' };
+  const labels = { origen: 'Préstamo original', ampliacion: 'Ampliación', abono: 'Abono a capital', pago: 'Pago de cuota', liquidacion: 'Liquidación total' };
   [...client.ledger].reverse().forEach((entry) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${fmtDate(entry.date)}</td><td>${labels[entry.type] || entry.type}</td><td>${money(entry.amount)}</td>`;
     ledgerBody.appendChild(tr);
   });
 
-  // Adjuntos (fotos / PDF del contrato)
   const attWrap = document.getElementById('detail-attachments');
   attWrap.innerHTML = '';
   (client.attachments || []).forEach((att) => {
@@ -775,8 +1145,6 @@ function renderDetail() {
   }
 }
 
-/* ---------- Adjuntar archivos desde el detalle del cliente ---------- */
-
 async function handleDetailAttachmentsSelected(event) {
   const files = event.target.files;
   if (!files || files.length === 0) return;
@@ -789,15 +1157,15 @@ async function handleDetailAttachmentsSelected(event) {
 
 /* ---------- Modales ---------- */
 
+function closeModal(id) {
+  document.getElementById(id).classList.remove('show');
+}
+
 function openPaymentModal(installmentNumber, suggestedAmount) {
   document.getElementById('pay-installment-number').value = installmentNumber;
   document.getElementById('pay-date').value = todayISO();
   document.getElementById('pay-amount').value = suggestedAmount;
   document.getElementById('modal-payment').classList.add('show');
-}
-
-function closeModal(id) {
-  document.getElementById(id).classList.remove('show');
 }
 
 function confirmPayment() {
@@ -859,15 +1227,49 @@ function confirmPrepay() {
   showToast('Abono registrado y cuotas recalculadas.');
 }
 
-function confirmDeleteClient() {
-  if (!confirm('¿Seguro que deseas eliminar este cliente? Esta acción no se puede deshacer.')) return;
-  deleteClient(editingClientId || currentClientId);
+function openPayoffModal(clientId) {
+  currentClientId = clientId;
+  const client = DB.clients.find((c) => c.id === clientId);
+  if (!client) return;
+  const s = calcPayoffSuggestion(client);
+  document.getElementById('payoff-info').textContent =
+    `${client.name}: capital pendiente ${money(s.balance)} + interés de la cuota en curso ${money(s.nextInterest)} = ${money(s.suggested)} (monto sugerido; puedes cambiarlo si acordaron otro).`;
+  document.getElementById('payoff-date').value = todayISO();
+  document.getElementById('payoff-amount').value = s.suggested;
+  document.getElementById('modal-payoff').classList.add('show');
+}
+
+function confirmPayoff() {
+  const client = DB.clients.find((c) => c.id === currentClientId);
+  if (!client) return;
+  const date = document.getElementById('payoff-date').value;
+  const amount = parseFloat(document.getElementById('payoff-amount').value);
+  const balance = currentBalance(client);
+  if (!date || isNaN(amount) || amount <= 0) {
+    showToast('Revisa la fecha y el monto ingresado.');
+    return;
+  }
+  if (amount < balance) {
+    showToast(`El monto debe cubrir al menos el capital pendiente (${money(balance)}).`, 4500);
+    return;
+  }
+  registerFullPayoff(currentClientId, date, amount);
+  closeModal('modal-payoff');
+  if (screens.detail.classList.contains('active')) renderDetail(); else renderHome();
+  showToast('Deuda liquidada. Ya puedes eliminar el nombre de la lista.', 4500);
+}
+
+function deleteClientWithConfirm(id) {
+  const c = DB.clients.find((x) => x.id === id);
+  if (!c) return;
+  if (!confirm(`¿Eliminar a "${c.name}" y todo su historial?\n\nNo se puede deshacer. La copia de Google Drive también se actualizará sin este cliente.`)) return;
+  deleteClient(id);
   showScreen('home');
   renderHome();
   showToast('Cliente eliminado.');
 }
 
-/* ---------- Import/Export UI ---------- */
+/* ---------- Importar archivo manual ---------- */
 
 function handleImportFile(event) {
   const file = event.target.files[0];
@@ -897,12 +1299,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('detail-back').addEventListener('click', () => { showScreen('home'); renderHome(); });
   document.getElementById('form-module').addEventListener('change', toggleMethodField);
   document.getElementById('client-form').addEventListener('submit', (e) => { e.preventDefault(); submitForm(); });
-  document.getElementById('delete-client-btn').addEventListener('click', confirmDeleteClient);
+  document.getElementById('delete-client-btn').addEventListener('click', () => deleteClientWithConfirm(editingClientId));
+  document.getElementById('detail-delete-btn').addEventListener('click', () => deleteClientWithConfirm(currentClientId));
   document.getElementById('f-attachments').addEventListener('change', handleNewAttachmentsSelected);
 
   document.getElementById('edit-client-btn').addEventListener('click', () => openForm(currentClientId));
   document.getElementById('extra-loan-btn').addEventListener('click', openExtraLoanModal);
   document.getElementById('prepay-btn').addEventListener('click', openPrepayModal);
+  document.getElementById('payoff-btn').addEventListener('click', () => openPayoffModal(currentClientId));
   document.getElementById('detail-attachments-input').addEventListener('change', handleDetailAttachmentsSelected);
 
   document.getElementById('modal-payment-confirm').addEventListener('click', confirmPayment);
@@ -911,11 +1315,29 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('modal-extra-cancel').addEventListener('click', () => closeModal('modal-extra'));
   document.getElementById('modal-prepay-confirm').addEventListener('click', confirmPrepay);
   document.getElementById('modal-prepay-cancel').addEventListener('click', () => closeModal('modal-prepay'));
+  document.getElementById('modal-payoff-confirm').addEventListener('click', confirmPayoff);
+  document.getElementById('modal-payoff-cancel').addEventListener('click', () => closeModal('modal-payoff'));
 
   document.getElementById('export-btn').addEventListener('click', exportData);
   document.getElementById('import-input').addEventListener('change', handleImportFile);
 
+  document.getElementById('cloud-connect-btn').addEventListener('click', connectCloud);
+  document.getElementById('cloud-backup-btn').addEventListener('click', manualBackup);
+  document.getElementById('cloud-restore-btn').addEventListener('click', manualRestore);
+  document.getElementById('banner-restore-btn').addEventListener('click', manualRestore);
+  document.getElementById('banner-skip-btn').addEventListener('click', () => {
+    localStorage.setItem(LS.restoreDismissed, '1');
+    updateRestoreBanner();
+  });
+
   setTab(1);
+
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+  // Copia nocturna: al abrir, al volver a la app y cada 10 minutos mientras esté abierta.
+  window.addEventListener('load', () => setTimeout(maybeNightlyBackup, 3000));
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') maybeNightlyBackup(); });
+  setInterval(maybeNightlyBackup, 10 * 60 * 1000);
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});

@@ -7,6 +7,7 @@
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0f172a">
 <link rel="stylesheet" href="style.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div id="app">
@@ -21,12 +22,27 @@
       <button id="tab-2" class="tab-btn">Capital + interés</button>
     </div>
     <main>
+      <div id="restore-banner" class="card banner" style="display:none;">
+        <strong>¿Ya usabas esta app antes?</strong>
+        <p>Si tenías una copia en Google Drive, puedes recuperar ahora todos tus clientes y préstamos.</p>
+        <button id="banner-restore-btn" class="full">☁️ Restaurar mis datos desde Google Drive</button>
+        <button id="banner-skip-btn" class="full secondary">No, empezar de cero</button>
+      </div>
+
       <div id="client-list"></div>
 
-      <div class="section-title">Respaldo de datos</div>
+      <div class="section-title">Copia de seguridad en la nube</div>
+      <div class="card">
+        <p id="cloud-status" class="cloud-status off"></p>
+        <button id="cloud-connect-btn" class="full">☁️ Conectar con Google Drive</button>
+        <button id="cloud-backup-btn" class="full secondary">💾 Respaldar ahora</button>
+        <button id="cloud-restore-btn" class="full secondary">⬇️ Restaurar desde Google Drive</button>
+      </div>
+
+      <div class="section-title">Respaldo manual (archivo)</div>
       <div class="card">
         <button id="export-btn" class="full secondary">⬇️ Exportar respaldo (JSON)</button>
-        <label style="margin-top:14px;">Restaurar desde un respaldo:</label>
+        <label style="margin-top:14px;">Restaurar desde un archivo de respaldo:</label>
         <input type="file" id="import-input" accept=".json">
       </div>
     </main>
@@ -93,7 +109,7 @@
         <div id="new-client-attachments-section">
           <label for="f-attachments">Foto(s) o PDF del contrato de préstamo (opcional)</label>
           <input type="file" id="f-attachments" accept="image/*,application/pdf" multiple>
-          <p class="file-hint">Puedes subir hasta 6 archivos, máximo 4MB cada uno. Se guardan solo en este celular.</p>
+          <p class="file-hint">Puedes subir hasta 6 archivos, máximo 4MB cada uno. Se guardan en este celular y van incluidos en la copia de Google Drive.</p>
           <div class="attachment-list" id="pending-attachments-preview"></div>
         </div>
 
@@ -134,6 +150,8 @@
           <button id="extra-loan-btn" class="secondary">➕ Ampliar</button>
           <button id="prepay-btn" class="secondary">💵 Abono</button>
         </div>
+        <button id="payoff-btn" class="full secondary">🏁 Liquidar deuda total (pago adelantado)</button>
+        <button id="detail-delete-btn" class="full danger" style="display:none;">🗑 Eliminar cliente (deuda terminada)</button>
       </div>
 
       <div class="section-title">Cronograma de cuotas</div>
@@ -222,8 +240,26 @@
     </div>
   </div>
 
+  <!-- ============ MODAL: LIQUIDAR DEUDA TOTAL ============ -->
+  <div class="modal-overlay" id="modal-payoff">
+    <div class="modal">
+      <h3>Liquidar deuda total</h3>
+      <p id="payoff-info" style="color:var(--text-dim); font-size:14px;"></p>
+      <label for="payoff-date">Fecha del pago</label>
+      <input type="date" id="payoff-date">
+      <label for="payoff-amount">Monto total pagado (S/.)</label>
+      <input type="number" step="0.01" id="payoff-amount">
+      <p class="file-hint">Al confirmar, el préstamo queda terminado y podrás eliminar el nombre de la lista.</p>
+      <div class="row" style="margin-top:14px;">
+        <button id="modal-payoff-cancel" class="secondary">Cancelar</button>
+        <button id="modal-payoff-confirm">Confirmar liquidación</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 </div>
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
