@@ -4,4 +4,4 @@
 // .apps.googleusercontent.com), entre las comillas.
 // Es lo único que debes editar en este archivo.
 // ============================================================
-const GOOGLE_CLIENT_ID = '6597258879-ki8if6shs1c0l55co19s6pptci0obbd6.apps.googleusercontent.com';
+const GOOGLE_CLIENT_ID = '708246108186-pej225miges57o3hb4l7f8rbc4prvvs8.apps.googleusercontent.com';
